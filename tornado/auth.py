@@ -48,6 +48,7 @@ class GoogleHandler(tornado.web.RequestHandler, tornado.auth.GoogleMixin):
 import base64
 import binascii
 import cgi
+import functools
 import hashlib
 import hmac
 import logging
@@ -342,13 +343,14 @@ class OAuthMixin(object):
         callback(user)
 
     def _oauth_request_parameters(self, url, access_token, parameters={},
-                                  method="GET"):
+                                  method="GET", consumer_token=None):
         """Returns the OAuth parameters as a dict for the given request.
 
         parameters should include all POST arguments and query string arguments
         that will be sent with the request.
         """
-        consumer_token = self._oauth_consumer_token()
+        if not consumer_token:
+            consumer_token = self._oauth_consumer_token()
         base_args = dict(
             oauth_consumer_key=consumer_token["key"],
             oauth_token=access_token["key"],
@@ -402,6 +404,7 @@ class OAuth2Mixin(object):
             )
         if extra_params: args.update(extra_params)
         return url + urllib.urlencode(args)
+
 
 class TwitterMixin(OAuthMixin):
     """Twitter OAuth authentication.
@@ -492,33 +495,9 @@ class TwitterMixin(OAuthMixin):
                 self.finish("Posted a message!")
 
         """
-        # Add the OAuth resource request signature if we have credentials
-        url = "http://api.twitter.com/1" + path + ".json"
-        if access_token:
-            all_args = {}
-            all_args.update(args)
-            all_args.update(post_args or {})
-            consumer_token = self._oauth_consumer_token()
-            method = "POST" if post_args is not None else "GET"
-            oauth = self._oauth_request_parameters(
-                url, access_token, all_args, method=method)
-            args.update(oauth)
-        if args: url += "?" + urllib.urlencode(args)
-        callback = self.async_callback(self._on_twitter_request, callback)
-        http = httpclient.AsyncHTTPClient()
-        if post_args is not None:
-            http.fetch(url, method="POST", body=urllib.urlencode(post_args),
-                       callback=callback)
-        else:
-            http.fetch(url, callback=callback)
-
-    def _on_twitter_request(self, callback, response):
-        if response.error:
-            logging.warning("Error response %s fetching %s", response.error,
-                            response.request.url)
-            callback(None)
-            return
-        callback(escape.json_decode(response.body))
+        consumer_token = self._oauth_consumer_token()
+        twitter = Twitter(consumer_token['key'], consumer_token['secret'])
+        twitter.request(path, callback, access_token, post_args, **args)
 
     def _oauth_consumer_token(self):
         self.require_setting("twitter_consumer_key", "Twitter OAuth")
@@ -537,6 +516,62 @@ class TwitterMixin(OAuthMixin):
         if user:
             user["username"] = user["screen_name"]
         callback(user)
+
+
+class Twitter(object):
+    """Twitter API request wrapper.
+
+    Example usage:
+
+        import ioloop
+
+        def callback(timeline):
+            print timeline
+            ioloop.IOLoop.instance().stop()
+
+        twitter = auth.Twitter(consumer_key, consumer_secret)
+        twitter.request("/statuses/home_timeline", access_token=access_token,
+                        callback=callback)
+        ioloop.IOLoop.instance().start()
+
+    The 'consumer_key' and 'consumer_secret' variables are as documented
+    in TwitterMixin. The 'access_token' should be saved from prior usage
+    of the get_authenticated_user() method of TwitterMixin.
+    """
+    def __init__(self, twitter_consumer_key, twitter_consumer_secret):
+        self._key = twitter_consumer_key
+        self._secret = twitter_consumer_secret
+
+    def request(self, path, callback, access_token=None, post_args=None,
+                **args):
+        # Add the OAuth resource request signature if we have credentials
+        url = "http://api.twitter.com/1" + path + ".json"
+        if access_token:
+            all_args = {}
+            all_args.update(args)
+            all_args.update(post_args or {})
+            method = "POST" if post_args is not None else "GET"
+            consumer_token = dict(key=self._key, secret=self._secret)
+            oauth = TwitterMixin()._oauth_request_parameters(
+                url, access_token, all_args, method=method,
+                consumer_token=consumer_token)
+            args.update(oauth)
+        if args: url += "?" + urllib.urlencode(args)
+        callback = functools.partial(self._on_twitter_request, callback)
+        http = httpclient.AsyncHTTPClient()
+        if post_args is not None:
+            http.fetch(url, method="POST", body=urllib.urlencode(post_args),
+                       callback=callback)
+        else:
+            http.fetch(url, callback=callback)
+
+    def _on_twitter_request(self, callback, response):
+        if response.error:
+            logging.warning("Error response %s fetching %s", response.error,
+                            response.request.url)
+            callback(None)
+            return
+        callback(escape.json_decode(response.body))
 
 
 class FriendFeedMixin(OAuthMixin):
