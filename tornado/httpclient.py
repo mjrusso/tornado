@@ -35,6 +35,7 @@ except ImportError:
     else:
         raise
 import sys
+import tempfile
 import threading
 import time
 import weakref
@@ -374,6 +375,7 @@ class HTTPRequest(object):
                  auth_username=None, auth_password=None,
                  connect_timeout=20.0, request_timeout=20.0,
                  if_modified_since=None, follow_redirects=True,
+                 include_cookies_on_redirect=False,
                  max_redirects=5, user_agent=None, use_gzip=True,
                  network_interface=None, streaming_callback=None,
                  header_callback=None, prepare_curl_callback=None,
@@ -412,6 +414,7 @@ class HTTPRequest(object):
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
         self.follow_redirects = follow_redirects
+        self.include_cookies_on_redirect = include_cookies_on_redirect
         self.max_redirects = max_redirects
         self.user_agent = user_agent
         self.use_gzip = use_gzip
@@ -537,6 +540,10 @@ def _curl_setup_request(curl, request, buffer, headers):
     curl.setopt(pycurl.MAXREDIRS, request.max_redirects)
     curl.setopt(pycurl.CONNECTTIMEOUT, int(request.connect_timeout))
     curl.setopt(pycurl.TIMEOUT, int(request.request_timeout))
+    if request.include_cookies_on_redirect:
+        cookie_file = tempfile.mkstemp()[1]
+        curl.setopt(pycurl.COOKIEFILE, cookie_file)
+        curl.setopt(pycurl.COOKIEJAR, cookie_file)
     if request.user_agent:
         curl.setopt(pycurl.USERAGENT, _utf8(request.user_agent))
     else:
